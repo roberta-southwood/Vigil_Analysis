@@ -1,0 +1,204 @@
+---
+title: "PLS Midterm Project"
+author: "Trixie Southwood"
+date: "March 23 2025"
+output: pdf_document
+---
+
+Load in libraries 
+```{r}
+library(tidyverse)
+library(maps)
+library(mapproj)
+library(lubridate)
+library(viridis)
+library(patchwork)
+
+
+```
+
+Read in data 
+```{r}
+ccc1 <- read.csv("ccc_compiled_20172020.csv")
+ccc1 <- ccc1 %>% 
+  select(-starts_with("source"))
+
+
+ccc2 <- read.csv("ccc_compiled_20212024.csv")
+ccc2 <- ccc2 %>% 
+  select(-starts_with("source"))
+
+ccc <- bind_rows(ccc1, ccc2)
+
+```
+
+
+Filter by issue 
+```{r}
+
+ccc_sep_issues <- ccc %>%
+  separate_longer_delim(issues, delim = ";")
+
+```
+
+Filter by vigil 
+```{r}
+
+vigils <- ccc %>% 
+  filter(type == "vigil")
+
+head(vigils)
+
+```
+
+Map of vigils 
+```{r}
+state_abbr_to_name <- data.frame(
+  state_abbr = c(state.abb, "DC"), 
+  state_name = c(tolower(state.name), "District of Columbia")  
+)
+
+state_vigil_counts <- ccc %>%
+  count(state)
+
+state_vigil_counts <- state_vigil_counts %>%
+  left_join(state_abbr_to_name, by = c("state" = "state_abbr"))
+
+us_states <- map_data("state")
+
+dc_map_data <- map_data("state") %>% 
+  filter(region == "district of columbia") %>%
+  mutate(region = "district of columbia") %>%
+  bind_rows(data.frame(
+    region = "district of columbia", 
+    long = -77.0369,  
+    lat = 38.9072,    
+    group = 1, 
+    order = 1
+  ))
+
+us_states <- bind_rows(us_states, dc_map_data)
+
+us_states_vigils <- us_states %>%
+  left_join(state_vigil_counts, by = c("region" = "state_name"))
+
+label_data <- us_states_vigils %>%
+  filter(region %in% c("california", "new york", "district of columbia"))
+
+plot2 <- ggplot(data = us_states_vigils, mapping = aes(x = long, y = lat, group = group, fill = n)) +
+  geom_polygon(color = "gray90", size = 0.1) +
+  coord_map(projection = "albers", lat0 = 39, lat1 = 45) + 
+  scale_fill_viridis(option = "inferno", name = "Number of Vigils", na.value = "gray") + 
+  labs(title = "Total Vigils Held 2020 to 2024", x = " ", y = " ") +
+  theme_minimal() 
+  ggsave("vigils_by_state_map.png", width = 10, height = 8, dpi = 300)
+
+
+```
+
+
+Bar plot 
+```{r}
+
+get_vigil_count_total <- function(issue_name, ccc) {
+  vigils <- ccc %>%
+    filter(str_detect(issue_tags_summary, issue_name)) %>%
+    summarise(vigil_count = n()) %>%
+    mutate(issue = issue_name)  
+  
+  return(vigils)
+}
+
+military_vigils_total <- get_vigil_count_total("military", ccc)
+guns_vigils_total <- get_vigil_count_total("guns", ccc)
+racism_vigils_total <- get_vigil_count_total("racism", ccc)
+policing_vigils_total <- get_vigil_count_total("policing", ccc)
+education_vigils_total <- get_vigil_count_total("education", ccc)
+
+vigil_data_total <- bind_rows(military_vigils_total,
+                              guns_vigils_total,
+                              racism_vigils_total,
+                              policing_vigils_total,
+                              education_vigils_total)
+
+vigil_data_total$issue <- factor(vigil_data_total$issue, 
+                                 levels = vigil_data_total$issue[order(vigil_data_total$vigil_count, decreasing = TRUE)])
+
+issue_colors <- viridis(5, option = "inferno")
+
+vigil_data_total$color <- case_when(
+  vigil_data_total$issue == "military" ~ issue_colors[1],
+  vigil_data_total$issue == "guns" ~ issue_colors[2],
+  vigil_data_total$issue == "racism" ~ issue_colors[3],
+  vigil_data_total$issue == "policing" ~ issue_colors[4],
+  vigil_data_total$issue == "education" ~ issue_colors[6]
+)
+
+ggplot(vigil_data_total, aes(x = issue, y = vigil_count, fill = issue)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Top Five Issues Protested at Vigils",
+    x = " ",
+    y = "Total Count",
+    fill = " "
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  scale_fill_manual(values = issue_colors)  
+
+  ggsave("issuesbar.png", width = 10, height = 8, dpi = 300)
+
+```
+
+Time series 
+```{r}
+
+get_vigil_monthly <- function(issue_name, ccc) {
+  vigils <- ccc %>%
+    filter(str_detect(issue_tags_summary, issue_name)) %>%
+    mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+    mutate(year_month = floor_date(date, "month")) %>%
+    group_by(year_month) %>%
+    summarise(vigil_count = n(), .groups = "drop") %>%
+    mutate(issue = issue_name)  
+  
+  return(vigils)
+}
+
+military_vigils_monthly <- get_vigil_monthly("military", ccc)
+guns_vigils_monthly <- get_vigil_monthly("guns", ccc)
+racism_vigils_monthly <- get_vigil_monthly("racism", ccc)
+policing_vigils_monthly <- get_vigil_monthly("policing", ccc)
+education_vigils_monthly <- get_vigil_monthly("education", ccc)
+
+vigil_data <- bind_rows(military_vigils_monthly,
+                        guns_vigils_monthly,
+                        racism_vigils_monthly,
+                        policing_vigils_monthly,
+                        education_vigils_monthly)
+
+plot1 <- ggplot(vigil_data, aes(x = year_month)) +
+  geom_line(aes(y = vigil_count, color = issue), size = 1) + 
+  geom_point(aes(y = vigil_count, color = issue), size = 2) +
+  labs(title = "Top Five Issues of Vigils Over Time",
+       x = " ", 
+       y = "Number of Vigils", subtitle = "By month from 2020 to 2025") +
+  scale_color_manual(values = issue_colors) +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  
+  theme_minimal() +
+  theme(legend.title = element_blank())  
+
+  ggsave("vigilsovertime.png", width = 10, height = 8, dpi = 300)
+
+```
+
+Patchwork plot 
+```{r}
+plot1 + plot2 
+  
+ggsave("cominedplot.png", width = 20, height = 13, dpi = 300)
+
+```
+
+
+
